@@ -164,17 +164,28 @@ if [[ "${1:-}" == "update" ]]; then
   exit 0
 fi
 
-"${ENGINE}" build \
-  -t "${IMAGE_NAME}" \
-  -f "${DOCKERFILE_PATH}" \
-  "$(dirname "${DOCKERFILE_PATH}")" >/dev/null
+# Build the image only when it's missing. Use `copilot-container update` to
+# force a rebuild once the image exists.
+if ! "${ENGINE}" image inspect "${IMAGE_NAME}" >/dev/null 2>&1; then
+  echo "Building ${IMAGE_NAME} (first run) ..." >&2
+  "${ENGINE}" build \
+    -t "${IMAGE_NAME}" \
+    -f "${DOCKERFILE_PATH}" \
+    "$(dirname "${DOCKERFILE_PATH}")" >/dev/null
+fi
 
 if [ -n "${COPILOT_GITHUB_TOKEN:-}" ]; then
   COPILOT_TOKEN="${COPILOT_GITHUB_TOKEN}"
 elif [ -n "${GH_TOKEN:-}" ]; then
   COPILOT_TOKEN="${GH_TOKEN}"
-else
-  COPILOT_TOKEN="$(gh auth token)"
+elif ! command -v gh >/dev/null 2>&1; then
+  echo "error: no GitHub token available" >&2
+  echo "       set COPILOT_GITHUB_TOKEN or GH_TOKEN, or install the gh CLI and run 'gh auth login'" >&2
+  exit 1
+elif ! COPILOT_TOKEN="$(gh auth token 2>/dev/null)" || [ -z "${COPILOT_TOKEN}" ]; then
+  echo "error: could not obtain a GitHub token from gh" >&2
+  echo "       run 'gh auth login', or set COPILOT_GITHUB_TOKEN or GH_TOKEN" >&2
+  exit 1
 fi
 
 # Full auto-approval by default because the CLI runs inside this container.
@@ -204,8 +215,8 @@ RUN_ARGS=(
   -e GH_TOKEN="${COPILOT_TOKEN}"
   -e COPILOT_NTFY_TOPIC="${COPILOT_NTFY_TOPIC:-}"
   --network=host
-  "${GIT_IDENTITY_ARGS[@]}"
-  "${GITCONFIG_MOUNT_ARGS[@]}"
+  ${GIT_IDENTITY_ARGS[@]+"${GIT_IDENTITY_ARGS[@]}"}
+  ${GITCONFIG_MOUNT_ARGS[@]+"${GITCONFIG_MOUNT_ARGS[@]}"}
 )
 
 if printf '%s' "${ENGINE_INFO}" | grep -qi podman; then

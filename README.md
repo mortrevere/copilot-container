@@ -49,7 +49,7 @@ alias copilot='~/.local/bin/copilot-container'
 
 ```bash
 copilot                       # start an interactive Copilot session in $PWD
-copilot "fix the failing test"  # one-shot prompt
+copilot -p "fix the failing test"  # one-shot prompt
 copilot --resume              # resume from the persistent global-resume dir
 copilot bash                  # drop into a shell inside the container
 copilot update                # rebuild the image with --no-cache (keeps a backup tag)
@@ -107,6 +107,5 @@ Delete that directory to reset all state.
 
 - The container runs as your host UID/GID, so files it creates in `/workspace`
   are owned by you.
-- `--network=host` is used so the CLI can reach GitHub and ntfy directly.
 - `--allow-all` is intentional: the CLI is sandboxed inside the container, not on
   your host.
