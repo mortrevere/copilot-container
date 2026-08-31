@@ -14,6 +14,7 @@ set -euo pipefail
 #   DOCKERFILE_PATH     path to Dockerfile             (default: next to this script)
 #   HOST_COPILOT_HOME   host dir for persistent state   (default: XDG_DATA_HOME/copilot-cli)
 #   COPILOT_NTFY_TOPIC  ntfy.sh topic for notifications (default: empty / disabled)
+#   COPILOT_MODEL       model passed to Copilot on startup (default: CLI default)
 #   COPILOT_GITHUB_TOKEN / GH_TOKEN
 #                       GitHub token (falls back to `gh auth token`)
 
@@ -192,6 +193,11 @@ fi
 COPILOT_DEFAULTS=(
   --allow-all
 )
+if [ -n "${COPILOT_MODEL:-}" ]; then
+  COPILOT_DEFAULTS+=(
+    --model "${COPILOT_MODEL}"
+  )
+fi
 
 if [[ "${1:-}" == "bash" ]]; then
   : # drop into container shell as-is

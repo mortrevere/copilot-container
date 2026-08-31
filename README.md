@@ -76,6 +76,7 @@ All optional, set as environment variables:
 | `DOCKERFILE_PATH`    | `Dockerfile` next to the wrapper | Where to find the Dockerfile.    |
 | `HOST_COPILOT_HOME`  | `${XDG_DATA_HOME:-~/.local/share}/copilot-cli` | Host dir for persistent Copilot state. |
 | `COPILOT_NTFY_TOPIC` | *(empty / disabled)*             | [ntfy.sh](https://ntfy.sh) topic for notifications.|
+| `COPILOT_MODEL`      | *(Copilot CLI default)*           | Model passed to Copilot on startup.                 |
 | `COPILOT_GITHUB_TOKEN` / `GH_TOKEN` | *(from `gh`)*     | GitHub token override.                             |
 
 ### Notifications (optional)
