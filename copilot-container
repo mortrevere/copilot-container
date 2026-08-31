@@ -13,8 +13,8 @@ set -euo pipefail
 #   CONTAINER_ENGINE    "docker" or "podman"            (default: auto-detected)
 #   DOCKERFILE_PATH     path to Dockerfile             (default: next to this script)
 #   HOST_COPILOT_HOME   host dir for persistent state   (default: XDG_DATA_HOME/copilot-cli)
+#   COPILOT_PROFILE     profile selected at startup     (default: default)
 #   COPILOT_NTFY_TOPIC  ntfy.sh topic for notifications (default: empty / disabled)
-#   COPILOT_MODEL       model passed to Copilot on startup (default: CLI default)
 #   COPILOT_GITHUB_TOKEN / GH_TOKEN
 #                       GitHub token (falls back to `gh auth token`)
 
@@ -22,85 +22,86 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
 IMAGE_NAME="${IMAGE_NAME:-copilot-container}"
 WORKDIR_IN_CONTAINER="/workspace"
-GLOBAL_RESUME_DIR="/copilot-state/global-resume"
 
 UID_VALUE="$(id -u)"
 GID_VALUE="$(id -g)"
 GROUPS_CSV="$(id -G | tr ' ' ',')"
 CALLER_PWD="$(pwd)"
 HOST_COPILOT_HOME="${HOST_COPILOT_HOME:-${XDG_DATA_HOME:-$HOME/.local/share}/copilot-cli}"
+PROFILE_NAME="${COPILOT_PROFILE:-default}"
+COPILOT_ARGS=()
 USE_GLOBAL_RESUME=false
 
-for arg in "$@"; do
-  case "${arg}" in
+while [ "$#" -gt 0 ]; do
+  case "$1" in
+    --profile)
+      if [ "$#" -lt 2 ] || [ -z "$2" ]; then
+        echo "error: --profile requires a profile name" >&2
+        exit 1
+      fi
+      PROFILE_NAME="$2"
+      shift 2
+      ;;
+    --profile=*)
+      PROFILE_NAME="${1#--profile=}"
+      if [ -z "${PROFILE_NAME}" ]; then
+        echo "error: --profile requires a profile name" >&2
+        exit 1
+      fi
+      shift
+      ;;
     --resume|--resume=*|-r|-r=*)
       USE_GLOBAL_RESUME=true
+      COPILOT_ARGS+=("$1")
+      shift
+      ;;
+    *)
+      COPILOT_ARGS+=("$1")
+      shift
       ;;
   esac
 done
 
-mkdir -p "${HOST_COPILOT_HOME}" "${HOST_COPILOT_HOME}/hooks"
-if [ "${USE_GLOBAL_RESUME}" = true ]; then
-  mkdir -p "${HOST_COPILOT_HOME}/global-resume"
+if [[ ! "${PROFILE_NAME}" =~ ^[A-Za-z0-9][A-Za-z0-9_-]*$ ]]; then
+  echo "error: invalid profile name: ${PROFILE_NAME}" >&2
+  exit 1
 fi
 
-# First-run state seeding (idempotent). Mirrors what the Nix activation script
-# used to write into the copilot-state dir.
-
-# Auto-trust /workspace so copilot doesn't prompt on startup.
-if [ ! -f "${HOST_COPILOT_HOME}/settings.json" ]; then
-  printf '%s\n' '{"trustedFolders":["/workspace"]}' > "${HOST_COPILOT_HOME}/settings.json"
+PROFILE_DIR="${SCRIPT_DIR}/profiles/${PROFILE_NAME}"
+if [ ! -d "${PROFILE_DIR}" ]; then
+  echo "error: profile not found: ${PROFILE_NAME}" >&2
+  echo "       expected ${PROFILE_DIR}" >&2
+  exit 1
 fi
+DEFAULT_PROFILE_DIR="${SCRIPT_DIR}/profiles/default"
 
-# ntfy.sh notification hooks (a no-op unless COPILOT_NTFY_TOPIC is set).
-cat > "${HOST_COPILOT_HOME}/hooks/notify.json" << 'HOOKSEOF'
-{
-  "version": 1,
-  "hooks": {
-    "notification": [
-      {
-        "type": "command",
-        "matcher": "permission_prompt|elicitation_dialog|agent_idle",
-        "bash": "/usr/local/bin/copilot-hooks/notify-waiting.sh",
-        "timeoutSec": 10
-      }
-    ],
-    "preToolUse": [
-      {
-        "type": "command",
-        "matcher": "ask_user",
-        "bash": "/usr/local/bin/copilot-hooks/notify-waiting.sh",
-        "timeoutSec": 5
-      }
-    ],
-    "agentStop": [
-      {
-        "type": "command",
-        "bash": "/usr/local/bin/copilot-hooks/notify-done.sh",
-        "timeoutSec": 10
-      }
-    ]
-  }
+profile_file() {
+  local file_name="$1"
+
+  if [ -e "${PROFILE_DIR}/${file_name}" ]; then
+    printf '%s\n' "${PROFILE_DIR}/${file_name}"
+  elif [ -e "${DEFAULT_PROFILE_DIR}/${file_name}" ]; then
+    printf '%s\n' "${DEFAULT_PROFILE_DIR}/${file_name}"
+  else
+    echo "error: profile ${PROFILE_NAME} has no ${file_name}, and default has no fallback" >&2
+    exit 1
+  fi
 }
-HOOKSEOF
 
-# Global instructions: the container carries the host Git identity (see below),
-# so commits must use that identity as-is.
-if [ ! -f "${HOST_COPILOT_HOME}/copilot-instructions.md" ]; then
-  cat > "${HOST_COPILOT_HOME}/copilot-instructions.md" << 'INSTRUCTIONSEOF'
-# Git commit authorship
+PROFILE_INIT="$(profile_file init.sh)"
+PROFILE_HOOKS="$(profile_file hooks.json)"
+PROFILE_INSTRUCTIONS="$(profile_file copilot-instructions.md)"
+PROFILE_SETTINGS="$(profile_file settings.json)"
 
-This session runs inside a container that is pre-configured with the
-host user's real Git identity (via `GIT_AUTHOR_NAME`/`GIT_AUTHOR_EMAIL`
-and a mounted `.gitconfig`). When creating commits:
+PROFILE_COPILOT_HOME="${HOST_COPILOT_HOME}/profiles/${PROFILE_NAME}"
 
-- Never override `user.name` or `user.email`.
-- Do not add tool-specific co-author trailers.
-- Do not replace the host user's commit author identity.
+# Profile-managed state seeding.
+mkdir -p "${PROFILE_COPILOT_HOME}/hooks"
+cp "${PROFILE_HOOKS}" "${PROFILE_COPILOT_HOME}/hooks/notify.json"
+cp "${PROFILE_INSTRUCTIONS}" "${PROFILE_COPILOT_HOME}/copilot-instructions.md"
+cp "${PROFILE_SETTINGS}" "${PROFILE_COPILOT_HOME}/settings.json"
 
-Commits must be authored solely as the host user.
-INSTRUCTIONSEOF
-fi
+set -- "${COPILOT_ARGS[@]}"
 
 # Carry the host Git identity into the container so commits use the same
 # author as the surrounding host checkout.
@@ -193,23 +194,23 @@ fi
 COPILOT_DEFAULTS=(
   --allow-all
 )
-if [ -n "${COPILOT_MODEL:-}" ]; then
-  COPILOT_DEFAULTS+=(
-    --model "${COPILOT_MODEL}"
-  )
-fi
+
+COPILOT_LAUNCH=(bash /copilot-container-init)
 
 if [[ "${1:-}" == "bash" ]]; then
   : # drop into container shell as-is
 elif [ "$#" -eq 0 ]; then
-  set -- copilot "${COPILOT_DEFAULTS[@]}"
+  set -- "${COPILOT_LAUNCH[@]}" "${COPILOT_DEFAULTS[@]}"
 elif [ "${USE_GLOBAL_RESUME}" = true ]; then
-  set -- copilot "${COPILOT_DEFAULTS[@]}" -C "${GLOBAL_RESUME_DIR}" --add-dir "${WORKDIR_IN_CONTAINER}" "$@"
+  if [ "${PROFILE_NAME}" = "default" ]; then
+    set -- "${COPILOT_LAUNCH[@]}" \
+      "${COPILOT_DEFAULTS[@]}" -C /copilot-state/global-resume --add-dir "${WORKDIR_IN_CONTAINER}" "$@"
+  else
+    set -- "${COPILOT_LAUNCH[@]}" "${COPILOT_DEFAULTS[@]}" "$@"
+  fi
 else
-  set -- copilot "${COPILOT_DEFAULTS[@]}" "$@"
+  set -- "${COPILOT_LAUNCH[@]}" "${COPILOT_DEFAULTS[@]}" "$@"
 fi
-
-ENGINE_INFO="$("${ENGINE}" info 2>/dev/null || true)"
 
 RUN_ARGS=(
   --rm
@@ -220,25 +221,28 @@ RUN_ARGS=(
   -e COPILOT_GITHUB_TOKEN="${COPILOT_TOKEN}"
   -e GH_TOKEN="${COPILOT_TOKEN}"
   -e COPILOT_NTFY_TOPIC="${COPILOT_NTFY_TOPIC:-}"
+  -e COPILOT_PROFILE_INIT="/copilot-profiles/${PROFILE_INIT#"${SCRIPT_DIR}/profiles/"}"
+  -v "${SCRIPT_DIR}/profiles:/copilot-profiles:ro"
+  -v "${SCRIPT_DIR}/copilot-container-init:/copilot-container-init:ro"
   --network=host
   ${GIT_IDENTITY_ARGS[@]+"${GIT_IDENTITY_ARGS[@]}"}
   ${GITCONFIG_MOUNT_ARGS[@]+"${GITCONFIG_MOUNT_ARGS[@]}"}
 )
 
-if printf '%s' "${ENGINE_INFO}" | grep -qi podman; then
+if [ "${ENGINE}" = "podman" ]; then
   RUN_ARGS+=(
     --userns=keep-id
     --user "${UID_VALUE}:${GID_VALUE}"
     --group-add keep-groups
     --security-opt label=disable
     -v "${CALLER_PWD}:${WORKDIR_IN_CONTAINER}:Z"
-    -v "${HOST_COPILOT_HOME}:/copilot-state:Z"
+    -v "${PROFILE_COPILOT_HOME}:/copilot-state:Z"
   )
 else
   RUN_ARGS+=(
     --user "${UID_VALUE}:${GID_VALUE}"
     -v "${CALLER_PWD}:${WORKDIR_IN_CONTAINER}"
-    -v "${HOST_COPILOT_HOME}:/copilot-state"
+    -v "${PROFILE_COPILOT_HOME}:/copilot-state"
   )
 
   IFS=',' read -r -a EXTRA_GROUPS <<< "${GROUPS_CSV}"

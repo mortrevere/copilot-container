@@ -1,0 +1,28 @@
+{
+  "version": 1,
+  "hooks": {
+    "notification": [
+      {
+        "type": "command",
+        "matcher": "permission_prompt|elicitation_dialog|agent_idle",
+        "bash": "/usr/local/bin/copilot-hooks/notify-waiting.sh",
+        "timeoutSec": 10
+      }
+    ],
+    "preToolUse": [
+      {
+        "type": "command",
+        "matcher": "ask_user",
+        "bash": "/usr/local/bin/copilot-hooks/notify-waiting.sh",
+        "timeoutSec": 5
+      }
+    ],
+    "agentStop": [
+      {
+        "type": "command",
+        "bash": "/usr/local/bin/copilot-hooks/notify-done.sh",
+        "timeoutSec": 10
+      }
+    ]
+  }
+}

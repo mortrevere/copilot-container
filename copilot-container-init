@@ -1,0 +1,7 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+mkdir -p "$HOME/.copilot"
+ln -sfn /copilot-state/copilot-instructions.md "$HOME/.copilot/copilot-instructions.md"
+bash "$COPILOT_PROFILE_INIT"
+exec copilot "$@"

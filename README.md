@@ -11,6 +11,8 @@ Works with **Docker or Podman** (auto-detected). No Nix required.
 
 - `Dockerfile` — the container image.
 - `copilot-container` — the host-side wrapper script that builds/runs the image.
+- `profiles/` — built-in profiles, each containing `init.sh`, `hooks.json`, and
+  `copilot-instructions.md`, and `settings.json`.
 
 ## 1. Build the image
 
@@ -51,6 +53,8 @@ alias copilot='~/.local/bin/copilot-container'
 copilot                       # start an interactive Copilot session in $PWD
 copilot -p "fix the failing test"  # one-shot prompt
 copilot --resume              # resume from the persistent global-resume dir
+copilot --profile pony        # start with the Ponytail plugin profile
+COPILOT_PROFILE=pony copilot  # select a profile with an environment variable
 copilot bash                  # drop into a shell inside the container
 copilot update                # rebuild the image with --no-cache (keeps a backup tag)
 ```
@@ -75,8 +79,8 @@ All optional, set as environment variables:
 | `CONTAINER_ENGINE`   | auto (`docker`, else `podman`)   | Force a specific container engine.                 |
 | `DOCKERFILE_PATH`    | `Dockerfile` next to the wrapper | Where to find the Dockerfile.    |
 | `HOST_COPILOT_HOME`  | `${XDG_DATA_HOME:-~/.local/share}/copilot-cli` | Host dir for persistent Copilot state. |
+| `COPILOT_PROFILE`    | `default`                        | Profile to use, overridden by `--profile`.         |
 | `COPILOT_NTFY_TOPIC` | *(empty / disabled)*             | [ntfy.sh](https://ntfy.sh) topic for notifications.|
-| `COPILOT_MODEL`      | *(Copilot CLI default)*           | Model passed to Copilot on startup.                 |
 | `COPILOT_GITHUB_TOKEN` / `GH_TOKEN` | *(from `gh`)*     | GitHub token override.                             |
 
 ### Notifications (optional)
@@ -91,18 +95,54 @@ export COPILOT_NTFY_TOPIC="my-unique-topic-name"
 Subscribe to the same topic in the ntfy app or at `https://ntfy.sh/my-unique-topic-name`.
 Leave it unset to disable notifications entirely.
 
-## Persistent state
+## Profiles and persistent state
 
-Sessions, resume data, hooks, and settings are stored on the host under
-`HOST_COPILOT_HOME` and mounted into the container at `/copilot-state`. On first
-run the wrapper seeds:
+Profiles become available by adding a directory beneath `profiles/` next to the
+wrapper. The default profile provides these assets, and named profiles may
+override any subset:
 
-- `settings.json` — auto-trusts `/workspace` so Copilot doesn't prompt on start.
-- `hooks/notify.json` — wires up the ntfy notification hooks.
-- `copilot-instructions.md` — instructs the agent to commit as your host Git
-  identity (never as a tool/bot).
+```text
+profiles/<profile>/
+├── init.sh
+├── hooks.json
+├── copilot-instructions.md
+└── settings.json
+```
 
-Delete that directory to reset all state.
+The selected profile's sessions, plugins, hooks, and settings are stored on the
+host at `HOST_COPILOT_HOME/profiles/<profile>/` and mounted into the container
+at `/copilot-state`. The wrapper copies `hooks.json` to `hooks/notify.json`
+and `copilot-instructions.md`, and copies the resolved profile `settings.json`
+into the selected state before each launch. Profile instructions are also
+linked into Copilot's `$HOME/.copilot` instruction-discovery path.
+`init.sh` runs inside the container before Copilot starts, so it can install
+profile-specific plugins.
+
+Profile files are optional for named profiles: a missing file falls back to the
+same file in `profiles/default/`; an existing empty file explicitly disables
+that profile asset. Hooks and instructions are copied on every startup so
+profile edits take effect immediately. The profile repository is authoritative
+for `settings.json`: settings changes made within the CLI are intentionally
+discarded when the session ends, while manual profile-file edits apply to the
+next instance. Copilot's internal `config.json` remains only in the private
+profile state directory, where its authentication and plugin metadata are not
+stored with the wrapper's profile files. A blank private `config.json` is
+treated as uninitialized and recreated at startup. The default
+profile's `settings.json` selects Copilot's `default` theme, which uses the
+terminal's native color palette rather than a Copilot-specific background.
+
+The `default` profile retains `--resume` support through its
+`global-resume/` directory, allowing its sessions to be resumed from any
+repository or folder. Named profiles do not use this shared resume store.
+
+Built-in profiles:
+
+- `default` — the standard hooks and commit-authorship instructions.
+- `pony` — installs the [Ponytail](https://github.com/DietrichGebert/ponytail)
+  plugin before starting Copilot.
+
+Delete a profile's state directory to reset that profile without affecting the
+others.
 
 ## Notes
 
