@@ -1,7 +1,10 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-mkdir -p "$HOME/.copilot"
-ln -sfn /copilot-state/copilot-instructions.md "$HOME/.copilot/copilot-instructions.md"
+mkdir -p "$HOME/.copilot" "$COPILOT_HOME/hooks"
+cp "$COPILOT_PROFILE_HOOKS" "$COPILOT_HOME/hooks/notify.json"
+cp "$COPILOT_PROFILE_INSTRUCTIONS" "$COPILOT_HOME/copilot-instructions.md"
+cp "$COPILOT_PROFILE_SETTINGS" "$COPILOT_HOME/settings.json"
+ln -sfn "$COPILOT_HOME/copilot-instructions.md" "$HOME/.copilot/copilot-instructions.md"
 bash "$COPILOT_PROFILE_INIT"
 exec copilot "$@"

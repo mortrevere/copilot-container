@@ -92,14 +92,16 @@ PROFILE_INIT="$(profile_file init.sh)"
 PROFILE_HOOKS="$(profile_file hooks.json)"
 PROFILE_INSTRUCTIONS="$(profile_file copilot-instructions.md)"
 PROFILE_SETTINGS="$(profile_file settings.json)"
+PROFILE_HOOKS_REL="${PROFILE_HOOKS#"${SCRIPT_DIR}/profiles/"}"
+PROFILE_INSTRUCTIONS_REL="${PROFILE_INSTRUCTIONS#"${SCRIPT_DIR}/profiles/"}"
+PROFILE_SETTINGS_REL="${PROFILE_SETTINGS#"${SCRIPT_DIR}/profiles/"}"
 
 PROFILE_COPILOT_HOME="${HOST_COPILOT_HOME}/profiles/${PROFILE_NAME}"
 
-# Profile-managed state seeding.
-mkdir -p "${PROFILE_COPILOT_HOME}/hooks"
-cp "${PROFILE_HOOKS}" "${PROFILE_COPILOT_HOME}/hooks/notify.json"
-cp "${PROFILE_INSTRUCTIONS}" "${PROFILE_COPILOT_HOME}/copilot-instructions.md"
-cp "${PROFILE_SETTINGS}" "${PROFILE_COPILOT_HOME}/settings.json"
+# Create the client-side path for local engines. The actual profile files are
+# seeded inside the container so Docker-outside-container setups use the
+# daemon-side bind source, not this shell's private filesystem.
+mkdir -p "${PROFILE_COPILOT_HOME}"
 
 set -- "${COPILOT_ARGS[@]}"
 
@@ -176,6 +178,17 @@ if ! "${ENGINE}" image inspect "${IMAGE_NAME}" >/dev/null 2>&1; then
     "$(dirname "${DOCKERFILE_PATH}")" >/dev/null
 fi
 
+if [ "${ENGINE}" = "docker" ]; then
+  "${ENGINE}" run --rm \
+    --user 0:0 \
+    -e TARGET_UID="${UID_VALUE}" \
+    -e TARGET_GID="${GID_VALUE}" \
+    -v "${PROFILE_COPILOT_HOME}:/copilot-state" \
+    "${IMAGE_NAME}" \
+    bash -lc 'mkdir -p /copilot-state/hooks && chown -R "${TARGET_UID}:${TARGET_GID}" /copilot-state' \
+    >/dev/null
+fi
+
 if [ -n "${COPILOT_GITHUB_TOKEN:-}" ]; then
   COPILOT_TOKEN="${COPILOT_GITHUB_TOKEN}"
 elif [ -n "${GH_TOKEN:-}" ]; then
@@ -222,6 +235,9 @@ RUN_ARGS=(
   -e GH_TOKEN="${COPILOT_TOKEN}"
   -e COPILOT_NTFY_TOPIC="${COPILOT_NTFY_TOPIC:-}"
   -e COPILOT_PROFILE_INIT="/copilot-profiles/${PROFILE_INIT#"${SCRIPT_DIR}/profiles/"}"
+  -e COPILOT_PROFILE_HOOKS="/copilot-profiles/${PROFILE_HOOKS_REL}"
+  -e COPILOT_PROFILE_INSTRUCTIONS="/copilot-profiles/${PROFILE_INSTRUCTIONS_REL}"
+  -e COPILOT_PROFILE_SETTINGS="/copilot-profiles/${PROFILE_SETTINGS_REL}"
   -v "${SCRIPT_DIR}/profiles:/copilot-profiles:ro"
   -v "${SCRIPT_DIR}/copilot-container-init:/copilot-container-init:ro"
   --network=host

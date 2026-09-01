@@ -111,7 +111,7 @@ profiles/<profile>/
 
 The selected profile's sessions, plugins, hooks, and settings are stored on the
 host at `HOST_COPILOT_HOME/profiles/<profile>/` and mounted into the container
-at `/copilot-state`. The wrapper copies `hooks.json` to `hooks/notify.json`
+at `/copilot-state`. The container copies `hooks.json` to `hooks/notify.json`
 and `copilot-instructions.md`, and copies the resolved profile `settings.json`
 into the selected state before each launch. Profile instructions are also
 linked into Copilot's `$HOME/.copilot` instruction-discovery path.
