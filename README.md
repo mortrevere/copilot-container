@@ -5,7 +5,7 @@ disposable container. Your current directory is mounted as `/workspace`, your
 host Git identity and GitHub token are forwarded in, and the CLI runs with
 `--allow-all` (safe, because it's confined to the container).
 
-Works with **Docker or Podman** (auto-detected). No Nix required.
+Works with **Podman**. No Nix required.
 
 ## Files
 
@@ -19,10 +19,8 @@ Works with **Docker or Podman** (auto-detected). No Nix required.
 From the directory containing these files:
 
 ```bash
-docker build . -f Dockerfile -t copilot-container
+podman build . -f Dockerfile -t copilot-container
 ```
-
-(Podman users: `podman build . -f Dockerfile -t copilot-container`.)
 
 The wrapper also builds the image automatically on first run, so this step is
 optional — but doing it once up front avoids a wait on your first invocation.
@@ -76,8 +74,7 @@ All optional, set as environment variables:
 | Variable             | Default                          | Purpose                                            |
 | -------------------- | -------------------------------- | -------------------------------------------------- |
 | `IMAGE_NAME`         | `copilot-container`              | Image tag to build/run.                            |
-| `CONTAINER_ENGINE`   | auto (`docker`, else `podman`)   | Force a specific container engine.                 |
-| `DOCKERFILE_PATH`    | `Dockerfile` next to the wrapper | Where to find the Dockerfile.    |
+| `DOCKERFILE_PATH`    | `Dockerfile` next to the wrapper | Where to find the Dockerfile.                      |
 | `HOST_COPILOT_HOME`  | `${XDG_DATA_HOME:-~/.local/share}/copilot-cli` | Host dir for persistent Copilot state. |
 | `COPILOT_PROFILE`    | `default`                        | Profile to use, overridden by `--profile`.         |
 | `COPILOT_NTFY_TOPIC` | *(empty / disabled)*             | [ntfy.sh](https://ntfy.sh) topic for notifications.|
@@ -146,7 +143,9 @@ others.
 
 ## Notes
 
-- The container runs as your host UID/GID, so files it creates in `/workspace`
-  are owned by you.
+- The container writes files as the launching host user via Podman's
+  `--userns=keep-id`.
+- If a launch reports that `/workspace` is not writable, fix the host checkout's
+  ownership or permissions before starting Copilot.
 - `--allow-all` is intentional: the CLI is sandboxed inside the container, not on
   your host.
