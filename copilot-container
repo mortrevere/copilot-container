@@ -131,11 +131,15 @@ fi
 
 PROFILE_COPILOT_HOME="${HOST_COPILOT_HOME}/profiles/${PROFILE_NAME}"
 
-# Create the client-side path for local engines. Pre-create the directories the
-# init script needs so first-run profile setup does not depend on mkdir through
-# the bind mount.
+# Create the client-side paths for local engines. Pre-create the directories
+# needed at launch so setup does not depend on mkdir through the bind mount.
 mkdir -p "${PROFILE_COPILOT_HOME}/hooks"
 chmod u+rwx "${PROFILE_COPILOT_HOME}" "${PROFILE_COPILOT_HOME}/hooks"
+
+if [ "${PROFILE_NAME}" = "default" ]; then
+  mkdir -p "${PROFILE_COPILOT_HOME}/global-resume"
+  chmod u+rwx "${PROFILE_COPILOT_HOME}/global-resume"
+fi
 
 if [ ! -w "${PROFILE_COPILOT_HOME}" ]; then
   echo "error: profile state is not writable: ${PROFILE_COPILOT_HOME}" >&2
