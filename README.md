@@ -20,6 +20,32 @@ Docker must be running and accessible to your user (`docker info` must succeed).
 The wrapper uses your current Docker context, including a rootless context.
 Use a local engine: bind-mounted paths and user IDs must refer to this host.
 
+This is meant for using Copilot CLI without letting it install tools, write
+config, or leave temporary state directly on your host machine. It is not a
+perfect sandbox: Copilot still has access to the mounted workspace, forwarded
+GitHub token, profile state, and network. Treat it as a convenience and safety
+wrapper, not as a hardened security boundary.
+
+Highlights:
+
+- Works with **Podman** or **Docker Engine**, preferring Podman when available.
+- Mounts the current directory at `/workspace` and keeps generated files owned
+  by your host user where the container engine allows it.
+- Forwards your host Git identity so commits made by Copilot are authored as
+  you.
+- Resolves a GitHub token from `COPILOT_GITHUB_TOKEN`, `GH_TOKEN`, or your local
+  `gh auth token`, so you can pass a more limited token if desired.
+- Supports `--profile` for custom instructions, settings, hooks, skills, and
+  per-profile persistent state. A `pony` profile is included as an example.
+- Sends optional desktop/mobile notifications through
+  [ntfy.sh](https://ntfy.sh) when Copilot is done or waiting for input.
+- Includes `gh`, `uv`, and `ruff` in the image; additional tools installed
+  inside the container disappear when the session ends.
+- Provides `copilot bash` for debugging inside the container and
+  `copilot update` for a clean image rebuild with a backup tag.
+- Checks workspace and profile-state writability before launching, and does not
+  mount the Docker socket or request privileged mode.
+
 ## Files
 
 - `Dockerfile` — the container image.
