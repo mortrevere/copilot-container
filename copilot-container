@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-# Standalone, non-Nix port of the copilot-container wrapper.
+# Host-side copilot-container wrapper.
 #
 # It builds (if needed) and runs the GitHub Copilot CLI inside a container,
 # mounting the current directory as /workspace. It forwards your host Git
@@ -180,49 +180,28 @@ if [ -f "${HOME}/.gitconfig" ]; then
   )
 fi
 
-workspace_is_writable() {
-  local workspace_check_args=(
-    --rm
-    -w "${WORKDIR_IN_CONTAINER}"
-    --network=none
-  )
+CONTAINER_IDENTITY_ARGS=(
+  --userns=keep-id
+  --user "${UID_VALUE}:${GID_VALUE}"
+  --group-add keep-groups
+  --security-opt label=disable
+)
 
-  workspace_check_args+=(
-    --userns=keep-id
-    --user "${UID_VALUE}:${GID_VALUE}"
-    --group-add keep-groups
-    --security-opt label=disable
-    -v "${CALLER_PWD}:${WORKDIR_IN_CONTAINER}:Z"
-  )
-
-  "${ENGINE}" run "${workspace_check_args[@]}" "${IMAGE_NAME}" bash -lc 'test -w .'
-}
-
-if ! workspace_is_writable >/dev/null 2>&1; then
+if ! "${ENGINE}" run \
+  --rm -w "${WORKDIR_IN_CONTAINER}" --network=none \
+  "${CONTAINER_IDENTITY_ARGS[@]}" \
+  -v "${CALLER_PWD}:${WORKDIR_IN_CONTAINER}:Z" \
+  "${IMAGE_NAME}" bash -lc 'test -w .' >/dev/null 2>&1; then
   echo "error: /workspace is not writable through ${ENGINE}" >&2
   echo "       fix host permissions before launching Copilot" >&2
   exit 1
 fi
 
-profile_state_is_writable() {
-  local profile_state_check_args=(
-    --rm
-    --network=none
-  )
-
-  profile_state_check_args+=(
-    --userns=keep-id
-    --user "${UID_VALUE}:${GID_VALUE}"
-    --group-add keep-groups
-    --security-opt label=disable
-    -v "${PROFILE_COPILOT_HOME}:/copilot-state:Z"
-  )
-
-  "${ENGINE}" run "${profile_state_check_args[@]}" "${IMAGE_NAME}" \
-    bash -lc ': > /copilot-state/.copilot-write-test && : > /copilot-state/hooks/.copilot-write-test && rm -f /copilot-state/.copilot-write-test /copilot-state/hooks/.copilot-write-test'
-}
-
-if ! profile_state_is_writable >/dev/null 2>&1; then
+if ! "${ENGINE}" run \
+  --rm --network=none \
+  "${CONTAINER_IDENTITY_ARGS[@]}" \
+  -v "${PROFILE_COPILOT_HOME}:/copilot-state:Z" \
+  "${IMAGE_NAME}" bash -lc ': > /copilot-state/.copilot-write-test && : > /copilot-state/hooks/.copilot-write-test && rm -f /copilot-state/.copilot-write-test /copilot-state/hooks/.copilot-write-test' >/dev/null 2>&1; then
   echo "error: /copilot-state is not writable through ${ENGINE}" >&2
   echo "       host path: ${PROFILE_COPILOT_HOME}" >&2
   echo "       fix host ownership/permissions before launching Copilot" >&2
@@ -243,26 +222,11 @@ elif ! COPILOT_TOKEN="$(gh auth token 2>/dev/null)" || [ -z "${COPILOT_TOKEN}" ]
   exit 1
 fi
 
-# Full auto-approval by default because the CLI runs inside this container.
-COPILOT_DEFAULTS=(
-  --allow-all
-)
-
-COPILOT_LAUNCH=(bash /copilot-container-init)
-
-if [[ "${1:-}" == "bash" ]]; then
-  : # drop into container shell as-is
-elif [ "$#" -eq 0 ]; then
-  set -- "${COPILOT_LAUNCH[@]}" "${COPILOT_DEFAULTS[@]}"
-elif [ "${USE_GLOBAL_RESUME}" = true ]; then
-  if [ "${PROFILE_NAME}" = "default" ]; then
-    set -- "${COPILOT_LAUNCH[@]}" \
-      "${COPILOT_DEFAULTS[@]}" -C /copilot-state/global-resume --add-dir "${WORKDIR_IN_CONTAINER}" "$@"
-  else
-    set -- "${COPILOT_LAUNCH[@]}" "${COPILOT_DEFAULTS[@]}" "$@"
+if [[ "${1:-}" != "bash" ]]; then
+  if [ "${USE_GLOBAL_RESUME}" = true ] && [ "${PROFILE_NAME}" = "default" ]; then
+    set -- -C /copilot-state/global-resume --add-dir "${WORKDIR_IN_CONTAINER}" "$@"
   fi
-else
-  set -- "${COPILOT_LAUNCH[@]}" "${COPILOT_DEFAULTS[@]}" "$@"
+  set -- bash /copilot-container-init --allow-all "$@"
 fi
 
 RUN_ARGS=(
@@ -286,10 +250,7 @@ RUN_ARGS=(
 )
 
 RUN_ARGS+=(
-  --userns=keep-id
-  --user "${UID_VALUE}:${GID_VALUE}"
-  --group-add keep-groups
-  --security-opt label=disable
+  "${CONTAINER_IDENTITY_ARGS[@]}"
   -v "${CALLER_PWD}:${WORKDIR_IN_CONTAINER}:Z"
   -v "${PROFILE_COPILOT_HOME}:/copilot-state:Z"
 )

@@ -5,7 +5,15 @@ disposable container. Your current directory is mounted as `/workspace`, your
 host Git identity and GitHub token are forwarded in, and the CLI runs with
 `--allow-all` (safe, because it's confined to the container).
 
-Works with **Podman**. No Nix required.
+Works with **Podman**.
+
+## Quickstart
+
+```bash
+git clone https://github.com/mortrevere/copilot-container.git
+cd copilot-container
+./copilot-container
+```
 
 ## Files
 
