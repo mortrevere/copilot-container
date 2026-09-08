@@ -5,9 +5,10 @@ set -euo pipefail
 #
 # It builds (if needed) and runs the GitHub Copilot CLI inside a container,
 # mounting the current directory as /workspace. It forwards your host Git
-# identity and GitHub token into the container and uses Podman.
+# identity and GitHub token into the container using Podman or Docker.
 #
 # Configuration (all optional, via environment variables):
+#   CONTAINER_ENGINE    podman or docker                (default: auto, prefer podman)
 #   IMAGE_NAME          image tag to build/run          (default: copilot-container)
 #   DOCKERFILE_PATH     path to Dockerfile             (default: next to this script)
 #   HOST_COPILOT_HOME   host dir for persistent state   (default: XDG_DATA_HOME/copilot-cli)
@@ -93,11 +94,58 @@ PROFILE_HOOKS_REL="${PROFILE_HOOKS#"${SCRIPT_DIR}/profiles/"}"
 PROFILE_INSTRUCTIONS_REL="${PROFILE_INSTRUCTIONS#"${SCRIPT_DIR}/profiles/"}"
 PROFILE_SETTINGS_REL="${PROFILE_SETTINGS#"${SCRIPT_DIR}/profiles/"}"
 
-if ! command -v podman >/dev/null 2>&1; then
-  echo "error: podman not found on PATH" >&2
+ENGINE="${CONTAINER_ENGINE:-}"
+if [ -z "${ENGINE}" ]; then
+  if command -v podman >/dev/null 2>&1; then
+    ENGINE=podman
+  elif command -v docker >/dev/null 2>&1; then
+    ENGINE=docker
+  else
+    echo "error: neither podman nor docker found on PATH" >&2
+    exit 1
+  fi
+fi
+case "${ENGINE}" in
+  podman|docker) ;;
+  *)
+    echo "error: CONTAINER_ENGINE must be podman or docker" >&2
+    exit 1
+    ;;
+esac
+if ! command -v "${ENGINE}" >/dev/null 2>&1; then
+  echo "error: ${ENGINE} not found on PATH" >&2
   exit 1
 fi
-ENGINE="podman"
+
+CONTAINER_IDENTITY_ARGS=(--security-opt label=disable)
+if [ "${ENGINE}" = podman ]; then
+  CONTAINER_IDENTITY_ARGS+=(
+    --userns=keep-id
+    --user "${UID_VALUE}:${GID_VALUE}"
+    --group-add keep-groups
+  )
+else
+  if ! DOCKER_SECURITY_OPTIONS="$("${ENGINE}" info --format '{{json .SecurityOptions}}')"; then
+    echo "error: cannot access the Docker daemon" >&2
+    echo "       check 'docker info', the active Docker context, and socket permissions" >&2
+    echo "       configure Docker access for your user; do not run this wrapper with sudo" >&2
+    exit 1
+  fi
+  if [[ "${DOCKER_SECURITY_OPTIONS}" == *'"name=rootless"'* ]]; then
+    # Rootless Docker maps container root to the daemon's unprivileged host user.
+    # Passing the host UID here would instead select a subordinate host UID.
+    CONTAINER_IDENTITY_ARGS+=(--user 0:0)
+  else
+    # Opt out of daemon userns-remap so bind mounts retain the caller's IDs.
+    CONTAINER_IDENTITY_ARGS+=(--userns=host --user "${UID_VALUE}:${GID_VALUE}")
+    read -r -a HOST_GROUPS <<< "$(id -G)"
+    for group in "${HOST_GROUPS[@]}"; do
+      if [ "${group}" != "${GID_VALUE}" ]; then
+        CONTAINER_IDENTITY_ARGS+=(--group-add "${group}")
+      fi
+    done
+  fi
+fi
 
 DOCKERFILE_PATH="${DOCKERFILE_PATH:-${SCRIPT_DIR}/Dockerfile}"
 if [ ! -f "${DOCKERFILE_PATH}" ]; then
@@ -105,6 +153,8 @@ if [ ! -f "${DOCKERFILE_PATH}" ]; then
   echo "       set DOCKERFILE_PATH to point at the Dockerfile" >&2
   exit 1
 fi
+
+set -- "${COPILOT_ARGS[@]}"
 
 if [[ "${1:-}" == "update" ]]; then
   BACKUP_TAG="backup-$(date +%d%m%Y)"
@@ -146,8 +196,7 @@ if [ ! -w "${PROFILE_COPILOT_HOME}" ]; then
   echo "       fix host ownership/permissions before launching Copilot" >&2
   exit 1
 fi
-
-set -- "${COPILOT_ARGS[@]}"
+PROFILE_COPILOT_HOME="$(cd "${PROFILE_COPILOT_HOME}" && pwd)"
 
 # Carry the host Git identity into the container so commits use the same
 # author as the surrounding host checkout.
@@ -180,33 +229,55 @@ if [ -f "${HOME}/.gitconfig" ]; then
   )
 fi
 
-CONTAINER_IDENTITY_ARGS=(
-  --userns=keep-id
-  --user "${UID_VALUE}:${GID_VALUE}"
-  --group-add keep-groups
-  --security-opt label=disable
+# Use private, unique probes so concurrent launches cannot clobber each other
+# or a pre-existing file. Check ownership on the host, not inside a user namespace.
+check_bind_write() (
+  host_path="$1"
+  container_path="$2"
+  shift 2
+  if ! probe_dir="$(mktemp -d "${host_path}/.copilot-write-test.XXXXXXXXXX")"; then
+    echo "error: cannot prepare ${container_path} write probe in ${host_path}" >&2
+    echo "       fix host ownership/permissions before launching Copilot" >&2
+    exit 1
+  fi
+  trap 'rm -f -- "${probe_dir}/owner"; rmdir -- "${probe_dir}"' EXIT
+
+  if ! "${ENGINE}" run \
+    --rm --network=none \
+    "${CONTAINER_IDENTITY_ARGS[@]}" \
+    -v "${host_path}:${container_path}" \
+    "${IMAGE_NAME}" bash -c '
+      set -eu
+      owner_file="$1"
+      shift
+      : > "$owner_file"
+      probe=""
+      trap '\''[ -z "$probe" ] || rm -f -- "$probe"'\'' EXIT
+      for directory in "$@"; do
+        probe="$(mktemp "$directory/.copilot-write-test.XXXXXXXXXX")"
+        rm -f -- "$probe"
+        probe=""
+      done
+    ' bash "${container_path}/${probe_dir##*/}/owner" "${container_path}" "$@"; then
+    echo "error: ${container_path} is not writable through ${ENGINE}" >&2
+    echo "       host path: ${host_path}" >&2
+    echo "       check the engine error above and host ownership/permissions" >&2
+    echo "       use a local daemon; rootless Docker must run as your user and cannot retain host supplementary groups" >&2
+    exit 1
+  fi
+  if [ ! -O "${probe_dir}/owner" ]; then
+    echo "error: ${ENGINE} did not create a file owned by your host user in ${host_path}" >&2
+    echo "       use a local daemon with matching user mappings (rootless Docker must run as your user)" >&2
+    exit 1
+  fi
 )
 
-if ! "${ENGINE}" run \
-  --rm -w "${WORKDIR_IN_CONTAINER}" --network=none \
-  "${CONTAINER_IDENTITY_ARGS[@]}" \
-  -v "${CALLER_PWD}:${WORKDIR_IN_CONTAINER}:Z" \
-  "${IMAGE_NAME}" bash -lc 'test -w .' >/dev/null 2>&1; then
-  echo "error: /workspace is not writable through ${ENGINE}" >&2
-  echo "       fix host permissions before launching Copilot" >&2
-  exit 1
+check_bind_write "${CALLER_PWD}" "${WORKDIR_IN_CONTAINER}"
+STATE_WRITE_DIRS=(/copilot-state/hooks)
+if [ "${PROFILE_NAME}" = default ]; then
+  STATE_WRITE_DIRS+=(/copilot-state/global-resume)
 fi
-
-if ! "${ENGINE}" run \
-  --rm --network=none \
-  "${CONTAINER_IDENTITY_ARGS[@]}" \
-  -v "${PROFILE_COPILOT_HOME}:/copilot-state:Z" \
-  "${IMAGE_NAME}" bash -lc ': > /copilot-state/.copilot-write-test && : > /copilot-state/hooks/.copilot-write-test && rm -f /copilot-state/.copilot-write-test /copilot-state/hooks/.copilot-write-test' >/dev/null 2>&1; then
-  echo "error: /copilot-state is not writable through ${ENGINE}" >&2
-  echo "       host path: ${PROFILE_COPILOT_HOME}" >&2
-  echo "       fix host ownership/permissions before launching Copilot" >&2
-  exit 1
-fi
+check_bind_write "${PROFILE_COPILOT_HOME}" /copilot-state "${STATE_WRITE_DIRS[@]}"
 
 if [ -n "${COPILOT_GITHUB_TOKEN:-}" ]; then
   COPILOT_TOKEN="${COPILOT_GITHUB_TOKEN}"
@@ -251,8 +322,8 @@ RUN_ARGS=(
 
 RUN_ARGS+=(
   "${CONTAINER_IDENTITY_ARGS[@]}"
-  -v "${CALLER_PWD}:${WORKDIR_IN_CONTAINER}:Z"
-  -v "${PROFILE_COPILOT_HOME}:/copilot-state:Z"
+  -v "${CALLER_PWD}:${WORKDIR_IN_CONTAINER}"
+  -v "${PROFILE_COPILOT_HOME}:/copilot-state"
 )
 
 exec "${ENGINE}" run "${RUN_ARGS[@]}" "${IMAGE_NAME}" "$@"

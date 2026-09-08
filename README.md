@@ -3,9 +3,10 @@
 Run the [GitHub Copilot CLI](https://github.com/github/copilot-cli) inside a
 disposable container. Your current directory is mounted as `/workspace`, your
 host Git identity and GitHub token are forwarded in, and the CLI runs with
-`--allow-all` (safe, because it's confined to the container).
+`--allow-all`. It can modify files in the mounted workspace and profile state.
 
-Works with **Podman**.
+Works with **Podman** or **Docker Engine** on Linux. The wrapper prefers Podman
+when both are installed; set `CONTAINER_ENGINE=docker` to select Docker explicitly.
 
 ## Quickstart
 
@@ -14,6 +15,10 @@ git clone https://github.com/mortrevere/copilot-container.git
 cd copilot-container
 ./copilot-container
 ```
+
+Docker must be running and accessible to your user (`docker info` must succeed).
+The wrapper uses your current Docker context, including a rootless context.
+Use a local engine: bind-mounted paths and user IDs must refer to this host.
 
 ## Files
 
@@ -28,6 +33,8 @@ From the directory containing these files:
 
 ```bash
 podman build . -f Dockerfile -t copilot-container
+# Or:
+docker build . -f Dockerfile -t copilot-container
 ```
 
 The wrapper also builds the image automatically on first run, so this step is
@@ -63,6 +70,7 @@ copilot --profile pony        # start with the Ponytail plugin profile
 COPILOT_PROFILE=pony copilot  # select a profile with an environment variable
 copilot bash                  # drop into a shell inside the container
 copilot update                # rebuild the image with --no-cache (keeps a backup tag)
+CONTAINER_ENGINE=docker copilot  # explicitly use Docker instead of Podman
 ```
 
 ## Authentication
@@ -81,6 +89,7 @@ All optional, set as environment variables:
 
 | Variable             | Default                          | Purpose                                            |
 | -------------------- | -------------------------------- | -------------------------------------------------- |
+| `CONTAINER_ENGINE`   | Auto-detect, preferring `podman` | Select `podman` or `docker`. An explicit choice never falls back. |
 | `IMAGE_NAME`         | `copilot-container`              | Image tag to build/run.                            |
 | `DOCKERFILE_PATH`    | `Dockerfile` next to the wrapper | Where to find the Dockerfile.                      |
 | `HOST_COPILOT_HOME`  | `${XDG_DATA_HOME:-~/.local/share}/copilot-cli` | Host dir for persistent Copilot state. |
@@ -149,11 +158,51 @@ Built-in profiles:
 Delete a profile's state directory to reset that profile without affecting the
 others.
 
-## Notes
+## Permissions and Docker setup
 
-- The container writes files as the launching host user via Podman's
-  `--userns=keep-id`.
-- If a launch reports that `/workspace` is not writable, fix the host checkout's
-  ownership or permissions before starting Copilot.
-- `--allow-all` is intentional: the CLI is sandboxed inside the container, not on
-  your host.
+The image is shared between users; no user-specific rebuild is needed. The
+wrapper selects the runtime identity for each engine:
+
+| Engine mode | Identity and bind-mount behavior |
+| ----------- | -------------------------------- |
+| Podman | Uses `--userns=keep-id`, your UID/GID, and `--group-add keep-groups` to retain host supplementary groups (requires a compatible runtime such as `crun`). |
+| Regular Docker | Uses your numeric UID/GID and supplementary group IDs, so newly created files belong to you, not root. Uses `--userns=host` to opt this container out of daemon-wide `userns-remap`; otherwise bind mounts would use subordinate IDs. |
+| Rootless Docker | Uses container UID/GID `0:0`, which maps to the unprivileged user running the daemon, **not host root**. The daemon must run as your user. Passing your host UID to a rootless container would select the wrong host identity. |
+
+Before starting Copilot, the wrapper creates temporary files through the
+workspace and state mounts and checks file ownership from the host. It also
+checks the hooks and default-profile resume directories. Failed probes stop
+the launch with the original engine error; temporary probes are cleaned up.
+The wrapper does not recursively `chown` your files, make them world-writable,
+mount the Docker socket, or request privileged mode. SELinux container labeling
+is disabled for these bind mounts; host files are not relabeled with `:Z`.
+
+If Docker reports a socket permission error, configure access for your normal
+user using [rootless Docker](https://docs.docker.com/engine/security/rootless/)
+or your administrator's Docker setup. Membership in the `docker` group grants
+root-equivalent access to a regular Docker daemon and may require a new login
+to take effect. **Do not fix this by running the wrapper with `sudo` or making
+the Docker socket world-writable**: `sudo` changes the Git identity, state
+location, and ownership of generated files.
+
+If `/workspace` or `/copilot-state` is not writable, check the reported host
+path's ownership, permissions, and any read-only filesystem restrictions.
+Existing root-owned files from earlier runs may need a targeted ownership
+repair by their owner or administrator. Rootless Docker cannot retain the
+caller's host supplementary groups: for group-only access to shared checkouts,
+use Podman with `keep-groups`, regular Docker, or arrange direct access for your
+user with the directory owner.
+
+`--allow-all` is intentional, but the container is not a complete security
+boundary: it has writable host bind mounts, your GitHub token, and host
+networking (inside the daemon's network namespace for rootless Docker).
+
+## Launcher regression tests
+
+```bash
+python3 -B -m unittest discover -s tests -v
+```
+
+These use mock engines and run the actual write-probe shell commands against
+temporary directories without requiring Docker or Podman. When Linux user
+namespaces are available, they also exercise rootless UID mapping.
