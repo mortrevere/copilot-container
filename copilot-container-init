@@ -7,4 +7,7 @@ cp "$COPILOT_PROFILE_INSTRUCTIONS" "$COPILOT_HOME/copilot-instructions.md"
 cp "$COPILOT_PROFILE_SETTINGS" "$COPILOT_HOME/settings.json"
 ln -sfn "$COPILOT_HOME/copilot-instructions.md" "$HOME/.copilot/copilot-instructions.md"
 bash "$COPILOT_PROFILE_INIT"
+if [ -n "${COPILOT_PROFILE_COMMAND:-}" ] && [ -s "$COPILOT_PROFILE_COMMAND" ]; then
+  exec bash "$COPILOT_PROFILE_COMMAND" "$@"
+fi
 exec copilot "$@"

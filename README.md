@@ -93,6 +93,9 @@ copilot                       # start an interactive Copilot session in $PWD
 copilot -p "fix the failing test"  # one-shot prompt
 copilot --resume              # resume from the persistent global-resume dir
 copilot --profile pony        # start with the Ponytail plugin profile
+copilot --profile pr create "focus on the API changes"
+copilot --profile pr describe "https://github.com/OWNER/REPO/pull/123"
+copilot --profile pr review "https://github.com/OWNER/REPO/pull/123"
 COPILOT_PROFILE=pony copilot  # select a profile with an environment variable
 copilot bash                  # drop into a shell inside the container
 copilot update                # rebuild the image with --no-cache (keeps a backup tag)
@@ -143,9 +146,12 @@ override any subset:
 
 ```text
 profiles/<profile>/
+├── command.sh
 ├── init.sh
 ├── hooks.json
 ├── copilot-instructions.md
+├── prompts/
+│   └── example.md
 └── settings.json
 ```
 
@@ -156,18 +162,26 @@ and `copilot-instructions.md`, and copies the resolved profile `settings.json`
 into the selected state before each launch. Profile instructions are also
 linked into Copilot's `$HOME/.copilot` instruction-discovery path.
 `init.sh` runs inside the container before Copilot starts, so it can install
-profile-specific plugins.
+profile-specific plugins. A profile may also include `command.sh`; when present,
+it runs inside the container after `init.sh` and receives the Copilot arguments.
+This lets a profile turn command-style arguments into a full Copilot invocation,
+such as selecting a model and passing a generated `-p` prompt.
+Command-style profiles may keep long prompts in versioned Markdown files under
+their own `prompts/` directory. The Markdown files are inert data; any
+placeholder rendering is owned by that profile's `command.sh`.
 
 Profile files are optional for named profiles: a missing file falls back to the
 same file in `profiles/default/`; an existing empty file explicitly disables
-that profile asset. Hooks and instructions are copied on every startup so
-profile edits take effect immediately. The profile repository is authoritative
-for `settings.json`: settings changes made within the CLI are intentionally
-discarded when the session ends, while manual profile-file edits apply to the
-next instance. Copilot's internal `config.json` remains only in the private
-profile state directory, where its authentication and plugin metadata are not
-stored with the wrapper's profile files. A blank private `config.json` is
-treated as uninitialized and recreated at startup. The default
+that profile asset. `command.sh` is optional and has no fallback requirement; a
+profile without it keeps the standard `copilot "$@"` argument forwarding. Hooks
+and instructions are copied on every startup so profile edits take effect
+immediately. The profile repository is authoritative for `settings.json`:
+settings changes made within the CLI are intentionally discarded when the
+session ends, while manual profile-file edits apply to the next instance.
+Copilot's internal `config.json` remains only in the private profile state
+directory, where its authentication and plugin metadata are not stored with the
+wrapper's profile files. A blank private `config.json` is treated as
+uninitialized and recreated at startup. The default
 profile's `settings.json` selects Copilot's `default` theme, which uses the
 terminal's native color palette rather than a Copilot-specific background.
 
@@ -180,6 +194,19 @@ Built-in profiles:
 - `default` — the standard hooks and commit-authorship instructions.
 - `pony` — installs the [Ponytail](https://github.com/DietrichGebert/ponytail)
   plugin before starting Copilot.
+- `pr` — command-style PR workflows:
+  - `copilot --profile pr create "[extra instruction]"` reads pending git
+    changes, creates logical commits on a branch based on the configured base
+    branch, and opens or updates a draft PR without running tests.
+  - `copilot --profile pr describe "<PR link>" "[extra instruction]"` updates
+    the PR title and description from a broader project standpoint, and rewrites
+    non-standard commit messages when needed.
+  - `copilot --profile pr review "<PR link>" "[extra instruction]"` addresses
+    open review comments and failing CI in a temporary worktree, pushes the
+    commits, replies to comments, and removes the worktree.
+  The prompt prose lives in `profiles/pr/prompts/*.md`; `command.sh` renders
+  `{{PR_LINK}}` and `{{EXTRA_INSTRUCTIONS}}` placeholders before invoking
+  Copilot.
 
 Delete a profile's state directory to reset that profile without affecting the
 others.

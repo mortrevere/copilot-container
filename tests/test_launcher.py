@@ -254,6 +254,53 @@ esac
         self.assert_success(self.launch("bash"))
         self.assertEqual(self.runs()[-1][-2:], ["copilot-container", "bash"])
 
+    def test_profile_command_is_wired_when_present(self):
+        self.engine("docker")
+        self.assert_success(self.launch("--profile", "pr", "describe", "https://github.com/o/r/pull/1"))
+        run = self.runs()[-1]
+        self.assertIn(f"{self.state}/profiles/pr:/copilot-state", run)
+        self.assertIn("COPILOT_PROFILE_COMMAND=/copilot-profiles/pr/command.sh", run)
+        self.assertEqual(run[-5:], ["bash", "/copilot-container-init", "--allow-all", "describe", "https://github.com/o/r/pull/1"])
+
+    def test_profile_without_command_keeps_standard_forwarding(self):
+        self.engine("docker")
+        self.assert_success(self.launch("--profile", "pony", "-p", "hello"))
+        run = self.runs()[-1]
+        self.assertIn("COPILOT_PROFILE_COMMAND=", run)
+        self.assertEqual(run[-5:], ["bash", "/copilot-container-init", "--allow-all", "-p", "hello"])
+
+    def test_pr_profile_command_generates_copilot_invocations(self):
+        commands = [
+            ("create", ("create", "focus on API"), "gpt-5.4", "Read the pending git changes", "focus on API"),
+            ("describe", ("describe", "https://github.com/o/r/pull/1", "mention migrations"), "gpt-5.5", "Read the PR at https://github.com/o/r/pull/1", "mention migrations"),
+            ("review", ("review", "https://github.com/o/r/pull/2", "prioritize CI"), "gemini-3.8-flash", "See the review comments on https://github.com/o/r/pull/2", "prioritize CI"),
+        ]
+
+        for name, args, model, prompt_start, extra in commands:
+            with self.subTest(name=name):
+                args_file = self.root / f"{name}-args.json"
+                self.script("copilot", f"""#!/usr/bin/env python3
+import json
+import os
+import sys
+with open(os.environ["COPILOT_ARGS_FILE"], "w") as file:
+    json.dump(sys.argv[1:], file)
+""")
+                result = subprocess.run(
+                    ["bash", str(ROOT / "profiles/pr/command.sh"), "--allow-all", *args],
+                    env={**self.env, "COPILOT_ARGS_FILE": str(args_file)},
+                    text=True,
+                    capture_output=True,
+                )
+                self.assertEqual(result.returncode, 0, result.stderr)
+                copilot_args = json.loads(args_file.read_text())
+                self.assertEqual(copilot_args[:4], ["--allow-all", "--model", model, "-p"])
+                self.assertIn(prompt_start, copilot_args[4])
+                self.assertIn(extra, copilot_args[4])
+                self.assertIn("Additional user instruction:\n", copilot_args[4])
+                self.assertNotIn("{{PR_LINK}}", copilot_args[4])
+                self.assertNotIn("{{EXTRA_INSTRUCTIONS}}", copilot_args[4])
+
     def test_git_identity_and_readonly_config_are_forwarded(self):
         self.engine("docker")
         self.script("git", """#!/usr/bin/env bash

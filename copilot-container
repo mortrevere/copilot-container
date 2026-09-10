@@ -86,13 +86,27 @@ profile_file() {
   fi
 }
 
+profile_optional_file() {
+  local file_name="$1"
+
+  if [ -e "${PROFILE_DIR}/${file_name}" ]; then
+    printf '%s\n' "${PROFILE_DIR}/${file_name}"
+  fi
+}
+
 PROFILE_INIT="$(profile_file init.sh)"
 PROFILE_HOOKS="$(profile_file hooks.json)"
 PROFILE_INSTRUCTIONS="$(profile_file copilot-instructions.md)"
 PROFILE_SETTINGS="$(profile_file settings.json)"
+PROFILE_COMMAND="$(profile_optional_file command.sh)"
 PROFILE_HOOKS_REL="${PROFILE_HOOKS#"${SCRIPT_DIR}/profiles/"}"
 PROFILE_INSTRUCTIONS_REL="${PROFILE_INSTRUCTIONS#"${SCRIPT_DIR}/profiles/"}"
 PROFILE_SETTINGS_REL="${PROFILE_SETTINGS#"${SCRIPT_DIR}/profiles/"}"
+if [ -n "${PROFILE_COMMAND}" ]; then
+  PROFILE_COMMAND_REL="${PROFILE_COMMAND#"${SCRIPT_DIR}/profiles/"}"
+else
+  PROFILE_COMMAND_REL=""
+fi
 
 ENGINE="${CONTAINER_ENGINE:-}"
 if [ -z "${ENGINE}" ]; then
@@ -313,6 +327,7 @@ RUN_ARGS=(
   -e COPILOT_PROFILE_HOOKS="/copilot-profiles/${PROFILE_HOOKS_REL}"
   -e COPILOT_PROFILE_INSTRUCTIONS="/copilot-profiles/${PROFILE_INSTRUCTIONS_REL}"
   -e COPILOT_PROFILE_SETTINGS="/copilot-profiles/${PROFILE_SETTINGS_REL}"
+  -e COPILOT_PROFILE_COMMAND="${PROFILE_COMMAND_REL:+/copilot-profiles/${PROFILE_COMMAND_REL}}"
   -v "${SCRIPT_DIR}/profiles:/copilot-profiles:ro"
   -v "${SCRIPT_DIR}/copilot-container-init:/copilot-container-init:ro"
   --network=host
